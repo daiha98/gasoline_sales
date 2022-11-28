@@ -1,0 +1,970 @@
+---
+title: "Análise de Vendas - Produtos de Petróleo - ANP"
+subtitle: 'Data Analysis'
+author: "Felipe Daiha Alves"
+date: '`r format(Sys.Date(), "%Y-%m-%d")`'
+output: 
+  html_document: 
+    fig_width: 14
+    fig_height: 8
+    highlight: monochrome
+    number_sections: true
+---
+\
+
+***
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r functions, echo=TRUE}
+
+# Funcoes utilizadas neste markdown
+
+  # 1 - numeric_mon
+
+  numeric_mon <- function(x){
+  
+  as.integer(
+    dplyr::case_when(
+      x == 'JAN' ~ 1,
+      x == 'FEV' ~ 2,
+      x == 'MAR' ~ 3,
+      x == 'ABR' ~ 4,
+      x == 'MAI' ~ 5,
+      x == 'JUN' ~ 6,
+      x == 'JUL' ~ 7,
+      x == 'AGO' ~ 8,
+      x == 'SET' ~ 9,
+      x == 'OUT' ~ 10,
+      x == 'NOV' ~ 11,
+      x == 'DEZ' ~ 12
+    ))
+
+  }
+
+  # 2 - corr_plot
+
+  corr_plot <- function(data, sub_type){
+    
+    ggcorrplot::ggcorrplot(
+      corr = as.data.frame(
+        stats::cor(data %>% 
+                     dplyr::select(dplyr::starts_with("vendas_")) %>%
+                     tidyr:: drop_na()), method = "pearson", use = "complete.obs", na.rm = TRUE),  
+      lab_size = 4.0, type = "upper", hc.order = TRUE, 
+      lab = TRUE, legend.title = "\nGrau\n", digits = 1) +
+      ggplot2::labs(
+        title = "Grafico de Correlação",
+        subtitle = paste0(sub_type, "\n")) +
+      ggplot2:: theme(
+        legend.text = element_text(size = 12.0),
+        legend.title = element_text(size = 12.0),
+        axis.text.x = element_text(size = 12, angle = 90),
+        axis.text.y = element_text(size = 12),
+        plot.title = element_text(size = 16.0, face = "bold"),
+        panel.border = element_rect(colour = "grey", fill = NA, size = 1))
+    
+  }
+  
+  # 3 - yyyy_mm
+  
+  yyyy_mm <- function(y, m){
+    zoo::as.Date(
+      zoo::as.yearmon(
+        as.character(
+          sprintf(
+            "%d-%02d", y, m)), 
+        "%Y-%m"))
+  }
+  
+  # 4 - scatter_sales
+  
+  barplot_sales <- function(df, sub_type){
+  
+  ## Dataset
+  
+  df_view <- df %>%
+    dplyr::mutate(year_mon = yyyy_mm(ano, mes)) %>%
+    dplyr::select(c(year_mon, grande_regiao, vendas_etanol_hidratado, vendas_gasolina_c)) %>%
+    tidyr::drop_na()
+  
+  ## Criando plot de visualizacao
+  
+  plot <- ggplot() + 
+    ggplot2::geom_col(data = df_view, aes(x = year_mon, y = vendas_gasolina_c, fill = 'Gasolina C')) +
+    ggplot2::geom_col(data = df_view, aes(x = year_mon, y = vendas_etanol_hidratado, fill = 'Etanol')) +
+    ggplot2::scale_x_date(breaks = "1 year", date_labels = "%Y", limits = c(min(df_view$year_mon), max(df_view$year_mon))) +
+    ggplot2::geom_vline(
+      aes(xintercept = as.Date("2003-01-01")), color="darkred",
+      linetype = "dashed") +
+    ggplot2::scale_fill_manual(
+      name = "Produto",
+      limits = c("Gasolina C", "Etanol"), 
+      values = c("#1F215E", "#E4A31C")) +
+    ggplot2::labs(
+      title = "Grafico de Volume Total de Vendas",
+      subtitle = paste0(sub_type, "\n"),
+      x = 'Ano-Mês',
+      y = 'Volume Total (m³)') +
+    ggplot2::theme(
+      panel.background = element_rect(fill = "white"),
+      legend.title = element_text(size = 14.0),
+      legend.text = element_text(size = 10.0),
+      axis.text.x = element_text(angle = 30, size = 10.0),
+      axis.text.y = element_text(size = 10.0),
+      axis.title.x = element_text(size = 14.0),
+      axis.title.y = element_text(size = 14.0),
+      panel.grid.major.y =  element_line(colour = "lightgrey"),
+      panel.grid.major.x =  element_line(colour = "lightgrey"),
+      plot.title = element_text(size = 16.0, face = "bold"),
+      plot.subtitle = element_text(size = 14.0),
+      strip.text.x = element_text(size = 10.0))
+  
+  ## Retorno do plot
+  
+  plot
+  
+  }
+  
+  # 5 - price_func
+  
+  price_func <- function(x){
+
+  # Listando paths dos dataframes capturados via scrapping
+  
+  pq_files <- base::list.files(
+    path = "C:/Users/daiha/OneDrive/Documentos/R/PS/Vibra/aux_datasets/precos_combustiveis/", 
+    full.names = TRUE)
+  
+  
+  # Criando uma lista vazia
+  
+  list_dfs <- base::list()
+  
+  
+  # Pegando cada dataframe e gerando view com media de venda por grupos
+  
+  for(i in pq_files) {
+    
+    # Leitura da base e tratamento de dados
+      
+    base <- arrow::read_parquet(i) %>%
+      dplyr::select(c("Regiao - Sigla", "Estado - Sigla", "Produto", "Data da Coleta", "Valor de Venda")) %>%
+      dplyr::mutate(year_mon = zoo::as.yearmon(lubridate::dmy(`Data da Coleta`))) %>%
+      dplyr::filter(Produto %in% c("ETANOL", "GASOLINA")) %>%
+      dplyr::mutate(
+        dplyr::across(
+          c(dplyr::starts_with("Valor")),
+          ~readr::parse_number(
+            x = .x, 
+            locale = locale(decimal_mark = ",", grouping_mark = ".")),
+          .names = "{.col}"
+        )
+      )
+    
+    # Agrupando produto por estado e puxando media dos valores de compra/venda
+    
+    base <- janitor::clean_names(base) 
+    
+    base <- base %>% 
+      dplyr::group_by(regiao_sigla, estado_sigla, produto, year_mon) %>%
+      dplyr::summarise(
+        dplyr::across(
+          c(dplyr::starts_with("valor")),
+          ~as.double(base::mean(.x, na.rm=TRUE)),
+          .names = "media_{.col}"
+          )
+        )
+      
+    list_dfs[[base::length(list_dfs) + 1]] <- base
+    
+    print(paste0("Dataset >", as.character(gsub("\\D", "", i)), "< sumarizado com sucesso!"))
+      
+  }
+  
+  # Concatenando tudo em um mesmo dataframe
+  
+  concat_df <- data.table::rbindlist(list_dfs, use.names = TRUE, fill = TRUE) %>%
+    tidyr::pivot_wider(
+      names_from = produto, 
+      values_from = media_valor_de_venda, 
+      values_fill = 0,
+      names_prefix = "media_valor_de_venda_")
+  
+  # Retornando produto 
+  
+  concat_df
+  
+}
+  
+  # 6 - region_abv
+  
+  region_abv <- function(x){
+  
+  as.character(
+    dplyr::case_when(
+      x == 'REGIÃO CENTRO-OESTE' ~ 'CO',
+      x == 'REGIÃO NORDESTE' ~ 'NE',
+      x == 'REGIÃO NORTE' ~ 'N',
+      x == 'REGIÃO SUDESTE' ~ 'SE',
+      x == 'REGIÃO SUL' ~ 'S'
+    ))
+
+  }
+  
+  # 7 - state_abv
+  
+  state_abv <- function(x){
+    
+    as.character(
+    dplyr::case_when(
+      x == 'ACRE' ~ 'AC',
+      x == 'ALAGOAS' ~ 'AL',
+      x == 'AMAPÁ' ~ 'AP',
+      x == 'AMAZONAS' ~ 'AM',
+      x == 'BAHIA' ~ 'BA',
+      x == 'CEARÁ' ~ 'CE',
+      x == 'DISTRITO FEDERAL' ~ 'DF',
+      x == 'ESPÍRITO SANTO' ~ 'ES',
+      x == 'GOIÁS' ~ 'GO',
+      x == 'MARANHÃO' ~ 'MA',
+      x == 'MATO GROSSO' ~ 'MT',
+      x == 'MATO GROSSO DO SUL' ~ 'MS',
+      x == 'MINAS GERAIS' ~ 'MG',
+      x == 'PARÁ' ~ 'PA',
+      x == 'PARAÍBA' ~ 'PB',
+      x == 'PARANÁ' ~ 'PR',
+      x == 'PERNAMBUCO' ~ 'PE',
+      x == 'PIAUÍ' ~ 'PI',
+      x == 'RIO DE JANEIRO' ~ 'RJ',
+      x == 'RIO GRANDE DO NORTE' ~ 'RN',
+      x == 'RIO GRANDE DO SUL' ~ 'RS',
+      x == 'RONDÔNIA' ~ 'RO',
+      x == 'RORAIMA' ~ 'RR',
+      x == 'SANTA CATARINA' ~ 'SC',
+      x == 'SÃO PAULO' ~ 'SP',
+      x == 'SERGIPE' ~ 'SE',
+      x == 'TOCANTINS' ~ 'TO'
+    ))
+    
+  }
+  
+  # 8 - yyyy_ss
+  
+  semester <- function(x){
+    as.integer(
+    dplyr::case_when(
+      x %in% c(1, 2, 3, 4, 5, 6) ~ 1,
+      TRUE ~ 2
+    ))
+  } 
+  
+  # 9 - sales_price_comparative
+  
+  sales_price_comparative <- function(df, vars, title, colour){
+  
+  ## Criando plot de visualizacao
+  
+  plot <- 
+    ggplot(data = df %>% 
+             dplyr::select(c(year_mon, vars)) %>%
+             dplyr::group_by(year_mon) %>% 
+             dplyr::summarise(
+               dplyr::across(
+                 c(dplyr::starts_with(c("media", "vendas"))),
+                 ~as.double(base::mean(.x, na.rm=TRUE)),
+                 .names = "avg_{.col}"
+               )
+             ) %>%
+             tidyr::pivot_longer(cols = dplyr::starts_with("avg")), 
+           aes(x = year_mon, y = value)) +
+    ggplot2::geom_line(linetype = "solid", color = colour, size = 1) +
+    ggplot2::geom_point(color = colour, size = 2) +
+    ggplot2::scale_x_date(breaks = "1 year", date_labels = "%Y") +
+    ggplot2::labs(
+      title = paste0("Comparativo Média Preço e Volume de Vendas\n", title)) +
+    ggplot2::xlab('Ano-Mês') +
+    ggplot2::ylab('Valor') +
+    ggplot2::theme(
+      panel.background = element_rect(fill = "white"),
+      legend.title = element_text(size = 14.0),
+      legend.text = element_text(size = 10.0),
+      axis.text.x = element_text(angle = 30, size = 10.0),
+      axis.text.y = element_text(size = 10.0),
+      axis.title.x = element_text(size = 14.0),
+      axis.title.y = element_text(size = 14.0),
+      panel.grid.major.y =  element_line(colour = "lightgrey"),
+      panel.grid.major.x =  element_line(colour = "lightgrey"),
+      plot.title = element_text(size = 16.0, face = "bold"),
+      plot.subtitle = element_text(size = 14.0),
+      strip.text.x = element_text(size = 10.0)) +
+    ggplot2::facet_wrap(~ factor(name), nrow = 2, ncol = 1, scales = 'free')
+  
+  ## Retorno do plot na funcao
+  
+  plot
+  
+  }
+  
+  # 10 - diff_ratio_comparative
+  
+  diff_ratio_comparative <- function(df, title){
+  
+  ## Criando plot de visualizacao
+  
+  plot <- ggplot(
+    data = sales_vbbr %>% 
+      dplyr::select(c(year_mon, dplyr::starts_with("media"))) %>%
+      dplyr::group_by(year_mon) %>% 
+      dplyr::summarise(
+        diff_valor = mean(media_valor_de_venda_GASOLINA) - mean(media_valor_de_venda_ETANOL),
+        ratio_valor = mean(media_valor_de_venda_GASOLINA) / mean(media_valor_de_venda_ETANOL)
+        ), 
+    aes(x = year_mon)) +
+    ggplot2::geom_line(aes(y = diff_valor, colour = 'Diferença'), size = 1) +
+    ggplot2::geom_point(aes(y = diff_valor, colour = 'Diferença'), size = 2) +
+    ggplot2::geom_line(aes(y = ratio_valor, colour = 'Razão'), size = 1) +
+    ggplot2::geom_point(aes(y = ratio_valor, colour = 'Razão'), size = 2) +
+    ggplot2::scale_x_date(breaks = "1 year", date_labels = "%Y") +
+    ggplot2::scale_fill_manual(
+      name = "Função",
+      limits = c("Diferença", "Razão"), 
+      values = c("#484CFF", "#0EC951")) +
+    ggplot2::labs(
+      title = paste0("Razão e Diferença de Preços entre Gasolina Comum e Etanol\n", title),
+      colour = "Função") +
+    ggplot2::xlab('Ano-Mês') +
+    ggplot2::ylab('Valor') +
+    ggplot2::theme(
+      panel.background = element_rect(fill = "white"),
+      legend.title = element_text(size = 14.0),
+      legend.text = element_text(size = 10.0),
+      axis.text.x = element_text(angle = 30, size = 10.0),
+      axis.text.y = element_text(size = 10.0),
+      axis.title.x = element_text(size = 14.0),
+      axis.title.y = element_text(size = 14.0),
+      panel.grid.major.y =  element_line(colour = "lightgrey"),
+      panel.grid.major.x =  element_line(colour = "lightgrey"),
+      plot.title = element_text(size = 16.0, face = "bold"),
+      plot.subtitle = element_text(size = 14.0),
+      strip.text.x = element_text(size = 10.0))
+  
+  ## Retorno do plot na funcao
+  
+  plot
+  
+  }
+  
+  # 11 - anp_bcp_comparative
+  
+  anp_bcp_comparative <- function(df, title){
+  
+  # Criando plot de visualizacao
+  
+  plot <- ggplot(
+    data = df %>% 
+      dplyr::select(c(year_mon, vendas_gasolina_c, volume_vendas_varejo_bcb)) %>%
+      dplyr::group_by(year_mon) %>% 
+      dplyr::summarise(
+        dplyr::across(
+          c(dplyr::starts_with(c("vendas", "volume"))),
+          ~as.double(base::mean(.x, na.rm=TRUE)),
+          .names = "avg_{.col}"
+          )
+        ) %>%
+      tidyr::pivot_longer(cols = dplyr::starts_with("avg")), 
+    aes(x = year_mon, y = value)) +
+    ggplot2::geom_line(linetype = "solid", color = "darkgreen", size = 1) +
+    ggplot2::geom_point(color = "darkgreen", size = 2) +
+    ggplot2::scale_x_date(breaks = "1 year", date_labels = "%Y") +
+    ggplot2::labs(
+      title = paste0("Volume de Vendas Gasolina Comum & Índice Varejo BCB\n", title)) +
+    ggplot2::xlab('Ano-Mês') +
+    ggplot2::ylab('Valor') +
+    ggplot2::theme(
+      panel.background = element_rect(fill = "white"),
+      legend.title = element_text(size = 14.0),
+      legend.text = element_text(size = 10.0),
+      axis.text.x = element_text(angle = 30, size = 10.0),
+      axis.text.y = element_text(size = 10.0),
+      axis.title.x = element_text(size = 14.0),
+      axis.title.y = element_text(size = 14.0),
+      panel.grid.major.y =  element_line(colour = "lightgrey"),
+      panel.grid.major.x =  element_line(colour = "lightgrey"),
+      plot.title = element_text(size = 16.0, face = "bold"),
+      plot.subtitle = element_text(size = 14.0),
+      strip.text.x = element_text(size = 10.0)) +
+    ggplot2::facet_wrap(~ factor(name), nrow = 2, ncol = 1, scales = 'free')
+  
+  # Retornando resultado
+  
+  plot
+  
+}
+
+```
+
+```{css, include=FALSE}
+li {
+    list-style-type: circle;
+}
+
+li li {
+    list-style-type: square;
+}
+```
+
+# **Disclaimer**:
+\
+Relatório da etapa de *data analysis* contendo informações e resultados sobre o processo de **Análise de Vendas** de produtos derivados de petróleo.
+
+
+***
+
+
+# **Objetivo**:
+\
+A finalidade deste *case* é desenvolver uma solução de dados que identifique o potencial de mercado para os meses de JAN/FEV/MAR de 2022 para o produto **Gasolina C** na região sudeste. Além disso, deve-se indicar o mercado potencial para o ano de 2022 para o mesmo produto e região. Para avaliação, segue os dados: 
+
+
+***
+
+
+# **Pipeline**:
+
+## . **Configuração de Ambiente & Data Cleaning**:
+\
+Etapa inicial de processamento de dados. Nele, iremos configurar nosso ambiente de desenvolvimento e tratar a base de dados inicialmente para análise posterior.
+\
+\
+     <p style="text-align: center;">A) **Configurando Ambiente**</p>
+\
+(Instalando e/ou carregando pacotes necessários e ajuste de opções de visualização.) 
+\
+\
+```{r env, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Nome dos pacotes
+
+packages <- c(
+  'rgl', ## Configuracao em RMarkdown
+  'data.table', 'arrow', 'GetBCBData',  ## Leitura de dados
+  'readr', 'dplyr', 'tidyr', 'janitor', 'zoo', 'lubridate', ## Manipulacao de Dados
+  'ggplot2', 'gridExtra', 'scales', 'ggcorrplot' ## Visualizacao de Dados
+  )
+
+
+# Instalando pacotes (caso ainda nao esteja)
+
+installed_packages <- packages %in% rownames(installed.packages())
+if (any(installed_packages == FALSE)) {
+  install.packages(packages[!installed_packages])
+}
+
+
+# Carregando pacotes
+
+invisible(lapply(packages, library, character.only = TRUE))
+
+
+# Removendo variaveis criadas previamente
+
+rm(packages, installed_packages)
+
+
+# Configuracoes de visualizacao no markdown
+
+base::options(rgl.useNULL = TRUE, digits = 10, scipen = 999, encoding = "utf-8", dplyr.summarise.inform = FALSE)
+rgl::setupKnitr(autoprint = TRUE)
+
+```
+\
+     <p style="text-align: center;">B) **Carregando Dados**</p>
+\
+(Carregamento de arquivo *.csv* e print de estrutura do arquivo para primeiro contato.)
+\
+\
+```{r loadData, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Load da base de dados
+
+sales_vbbr <- data.table::fread(
+  'C:/Users/daiha/OneDrive/Documentos/R/PS/Vibra/vendas-derivados-petroleo-etanol-m3-1990-2022.csv', 
+  encoding = "UTF-8") 
+
+
+# Visualizacao primaria dos dados
+
+dplyr::glimpse(sales_vbbr)
+
+```
+\
+\
+<ul>
+  <li>**Dicionário de Variáveis**
+    <ul>
+        <li>*ANO* <> Ano da Venda</li>
+        <li>*MES* <> Mês da Venda</li>
+        <li>*GRANDE REGIÃO* <> Região da Venda</li>
+        <li>*UNIDADE DA FEDERAÇÃO* <> Estado da Venda</li>
+        <li>*PRODUTO* <> Produto Vendido</li>
+        <li>*VENDAS* <> Volume Total (m³)</li>
+    </ul>
+  </li>
+</ul>
+
+\
+     <p style="text-align: center;">C) **Tratamento Inicial**</p>
+\
+(Com nossos dados devidamente carregados, podemos começar o processo de tratamento e limpeza de dados. Primeiro, verificaremos as classes de cada feature do dataset.)
+\
+\
+```{r classes, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Verificando classes das variaveis
+
+lapply(sales_vbbr %>% dplyr::select(!c(VENDAS)), table) 
+
+```
+\
+(Em seguida, começamos a tratar as variáveis individualmente (se necessario), printando na tela o produto final dessa etapa.)
+\
+\
+```{r initialClean, echo=TRUE, message=FALSE, warning=FALSE}
+
+# 1 - Convertendo variaveis necessarias (VENDAS para 'numeric' e MÊS para formato 'integer')
+
+sales_vbbr <- sales_vbbr %>%
+  dplyr::mutate(
+    VENDAS = readr::parse_number(
+      x = VENDAS, 
+      locale = locale(decimal_mark = ",", grouping_mark = ".")))
+
+# 2 - Pivoteando PRODUTO (linha -> coluna)
+
+sales_vbbr <- sales_vbbr %>%
+  tidyr::pivot_wider(
+    names_from = PRODUTO, 
+    values_from = VENDAS, 
+    values_fill = 0,
+    names_prefix = "vendas_")
+
+# 3 - Retirando espaco vazio do nome das colunas 
+
+sales_vbbr <- janitor::clean_names(sales_vbbr) %>%
+  dplyr::mutate(mes = numeric_mon(mes))
+
+# Printando na tela resultado do tratamento
+
+dplyr::glimpse(sales_vbbr)
+
+
+```
+\
+**Comments:** A ideia de pivotear as vendas dos produtos como coluna auxiliará na etapa de EDA, além de reduzir o shape do dataset para o formato desejado.
+\
+\
+(Avaliando se há valores faltantes evidentes na base de dados.)
+\
+\
+```{r checkNA, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Checando NAs
+
+sapply(sales_vbbr, function(x) sum(is.na(x)))
+
+
+```
+\
+(Por fim, ordenamos nosso dataframe apenas para aspecto visual do problema.)
+\
+\
+```{r sort, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Ordenando dataframe para melhor compreensao do problema
+
+sales_vbbr <- sales_vbbr %>%
+  dplyr::arrange(ano, mes, grande_regiao, unidade_da_federacao)
+
+
+# Print na tela
+
+head(sales_vbbr, 20)
+
+```
+\
+**Comments:** A etapa de tratamento e limpeza dos dados não pode ser dado como concluída. A medida que for feita a exploratória dos dados, pode-se ainda identificar *outliers* que poderão ser tratados conforme cada particularidade das *features*. É uma análise constantemente retomada durante uma *pipeline* de ciência de dados.
+\
+\
+
+
+***
+
+
+## . **Análise Exploratória de Dados**:
+\
+Fase de análise dos dados. A finalidade dessa etapa é compreender padrões e correlações que nos auxiliem a identificar variáveis para discriminação de **Vendas de Gasolina C**.
+\
+\
+Em um primeiro momento, apenas iremos estudar o dataset fornecido, guiando nossa busca de dados externos conforme os *insights* retirados dessa fase do projeto.
+\
+\
+     <p style="text-align: center;">A) **Sumário Estatístico**</p>
+\
+(Sumário de dados das variáveis numéricas que compõem o conjunto de dados) 
+\
+\
+```{r summary, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Estatisticas basicas para verificacao de intervalos
+
+summary(sales_vbbr %>% dplyr::select(where(is.numeric)))
+
+```
+\
+**Comments:** Entre os principais aspectos que chamam atenção aqui são:
+\
+\
+    <ul>
+        <li> **1 - Volume de Vendas Negativo?**: > O modelo de negócio é novo pra mim, mas ao meu ver não é possível que haja volume total de vendas negativo. Uma outra hipótese é que isso signifique uma **Devolução** do produto, correspondendo a um saldo negativo nas vendas. Para ambos os casos, devido à particularidade, iremos converter para um volume total de **0**; </li>
+        <li> **2 - Distribuições de Volumes** > É notável que a **demanda pelos produtos é diferente** conforme amplitude absoluta entre os quartis e valores máximos obtidos pelas vendas dos produtos; </li>
+    </ul>
+\
+```{r negativeSales, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Tratando casos de volumes de vendas negativos no dataframe
+
+sales_vbbr <- sales_vbbr %>%
+  dplyr::mutate(
+    dplyr::across(c(
+      where(is.numeric)),
+      ~base::ifelse(.x < 0, 0, .x)
+    )
+  )
+
+```
+\
+     <p style="text-align: center;">B) **Corrplot entre Vendas de Produtos**</p>
+\
+(Plot da matriz de correlação entre as variáveis numéricas de vendas.) 
+\
+\
+```{r corrplot, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Criando uma matrix de Correlacao de pearson e realizando ajustes no grafico
+
+gridExtra::grid.arrange(
+  corr_plot(sales_vbbr, "Todas as Regiões"),
+  corr_plot(sales_vbbr %>% dplyr::filter(grande_regiao == "REGIÃO SUDESTE"), "Região Sudeste"),
+  ncol = 2, nrow = 1)
+
+```
+\
+\
+**Comments:** A maioria dos produtos apresentam correlação média a fortíssima quando comparados à *Gasolina Comum*. Destaque para produtos com propósito de combustível para veículos como *Óleo Díesel*, *Querosene de Aviação* e *Etanol Hidratado*. Assim sendo, pode-se explorar o **histórico de vendas** (médias/somas móveis) desses produtos e **preços mensais** para auxiliar na previsão de vendas do *target*. Entretanto, essa visão corresponde a um comportamento nas vendas em **prazos longos**, o que não reflete o comportamento de curto prazo na relação entre os produtos.
+\
+\
+Pensando de maneira prática, desses produtos o mais correlacionado com a Gasolina Comum é o **Etanol Hidratado**! A grande maioria dos carros hoje são do tipo *flex* e quando há um aumento de preço na Gasolina, consequentemente há uma diminuição na sua demanda e um aumento na demanda por Etanol como substituto imediato do combustível. Dessa forma, utilizaremos o Etanol como principal produto para auxiliar na projeção de vendas da Gasolina. Os demais produtos serão eliminados da base para evitar eventuais ruídos no processo de modelagem.
+\
+\
+```{r dropProducts, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Selecionando apenas variáveis de interesse
+
+sales_vbbr <- sales_vbbr %>%
+  dplyr::select(ano, mes, grande_regiao, unidade_da_federacao, vendas_etanol_hidratado, vendas_gasolina_c)
+
+```
+     <p style="text-align: center;">C) **Vendas Gasolina Comum & Etanol**</p>
+\
+(Plot do volume de vendas desses 2 produtos para efeito comparativo).
+\
+\
+```{r bar_GCeEt, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Criando grafico de barras para visualizacao de vendas
+
+gridExtra::grid.arrange(
+  barplot_sales(sales_vbbr, "Segmentado por produto <> Todas as Regiões"),
+  barplot_sales(sales_vbbr %>% dplyr::filter(grande_regiao == "REGIÃO SUDESTE"), "Segmentado por produto <> Região Sudeste"),
+  ncol = 1, nrow = 2)
+
+# Adicionando feature year_mon
+
+sales_vbbr <- sales_vbbr %>%
+  dplyr::mutate(year_mon = yyyy_mm(ano, mes))
+
+```
+\
+\
+**Comments:** A adoção da indústria automobilística à veículos com flexibilidade no tipo de combustível iniciou-se no mercado a partir do ano de **2003**. Traçado no gráfico, vemos também como o *boom* do mercado impactou nas vendas totais de Etanol. Portanto, iremos filtrar nossa base para o período pós 2003-01.
+\
+\
+```{r filterPeriod, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Selecionando apenas variáveis de interesse
+
+sales_vbbr <- sales_vbbr %>%
+  dplyr::filter(year_mon >= "2003-03-01")
+
+```
+\
+\
+Além disso, vemos como em períodos curtos quando o volume de vendas de Gasolina C retrai, as vendas de Etanol aumentam e vice-versa, confirmando nossa hipótese a priori.
+\
+\
+     <p style="text-align: center;">D) **Web Scrapping - Preços ANP**</p>
+\
+(Rodando código elaborado pra scrapping do dataset *Série Histórica de Preços de Combustíveis*. Retirado da URL: <https://www.gov.br/anp/pt-br/centrais-de-conteudo/dados-abertos/serie-historica-de-precos-de-combustiveis>).
+\
+\
+```{r scrapper, echo=TRUE, message=FALSE, warning=FALSE}
+
+# list_dates <- c(unique(sales_vbbr$year_mon))
+# 
+# for (i in list_dates) {
+#   
+#   ## Lendo arquivo
+# 
+#   base <- try(
+#     data.table::fread(
+#       paste0(
+#         "https://www.gov.br/anp/pt-br/centrais-de-conteudo/dados-abertos/arquivos/shpc/dsas/ca/ca-", i, ".csv"),
+#       showProgress = TRUE))
+# 
+#   ## Se 'data' nao for da classe dataframe, next
+# 
+#   if(sum(class(base) %in% "try-error" == TRUE) > 0){
+# 
+#     rm(base)
+# 
+#   } else { ## Se nao retornar erro, entao salvar os dados
+# 
+#     ## Salvando dados publicos localmente no formato .parquet
+# 
+#     arrow::write_parquet(
+#       base,
+#       sink = paste0(
+#         "C:/Users/daiha/OneDrive/Documentos/R/PS/Vibra/aux_datasets/precos_combustiveis/ca_", i, ".parquet"))
+# 
+#     ## Removendo variavel do loop
+# 
+#     rm(base)
+# 
+#   }
+# 
+# }
+
+```
+\
+\
+(Puxando dados de *Preço de Venda* nas revendedoras por região, estado, produto e ano-mes).
+\
+\
+```{r groupedScrapper, echo=TRUE, message=FALSE, warning=FALSE}
+
+price_dataset <- price_func()
+
+```
+\
+\
+**Comments:** O dataset confere o preço de venda que **cada posto realizou a comercialização** dos diversos produtos nos postos de abastecimento. Será utilizado o mesmo racional de agrupamento, pegando a **média do preço praticado** para Gasolina Comum e Etanol Hidratado.
+\
+\
+(Tratando base principal para join)
+\
+\
+```{r df_with_sales_price, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Ajuste de variaveis para join entre datasets
+
+sales_vbbr <- sales_vbbr %>%
+  dplyr::mutate(
+    grande_regiao = region_abv(grande_regiao),
+    unidade_da_federacao = state_abv(unidade_da_federacao)) %>%
+  dplyr::inner_join(
+    price_dataset %>%
+      dplyr::mutate(year_mon = as.Date(year_mon)), 
+    by = c(
+      "grande_regiao" = "regiao_sigla",
+      "unidade_da_federacao" = "estado_sigla",
+      "year_mon" = "year_mon"
+      ))
+
+# Removendo base de precos
+
+rm(price_dataset)
+
+# Print de resultado
+
+dplyr::glimpse(sales_vbbr)
+
+```
+\
+\
+     <p style="text-align: center;">E) **Avaliação Preço & Vendas dos Produtos**</p>
+\
+(Validando hipótese demanda-preco ao comparar Gasolina C e Etanol)
+\
+\
+```{r plot_comparative_sales_price, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Plot em conjunto comparando preco e demanda dos produtos GASOLINA C e Etanol
+
+gridExtra::grid.arrange(
+  sales_price_comparative(
+    df = sales_vbbr, 
+    vars = c("media_valor_de_venda_GASOLINA", "vendas_gasolina_c"), 
+    title = "Gasolina <> Todas as Regiões",
+    colour = "#1F215E"),
+  sales_price_comparative(
+    df = sales_vbbr, 
+    vars = c("media_valor_de_venda_ETANOL", "vendas_etanol_hidratado"), 
+    title = "Etanol <> Todas as Regiões",
+    colour = "#E4A31C"),
+  ncol = 2, nrow = 1)
+
+```
+\
+\
+```{r plot_comparative_diff_ratio, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Plot comparando diferenca e razao de preco medio entre produtos
+
+gridExtra::grid.arrange(
+  diff_ratio_comparative(sales_vbbr, "Todas as Regiões"),
+  diff_ratio_comparative(sales_vbbr %>% dplyr::filter(grande_regiao == "SE"), "Região Sudeste"),
+  ncol = 1, nrow = 2)
+
+```
+\
+\
+**Comments:** O valor de venda nos postos entre os produtos tendem a **seguirem as mesmas tendências** pois são produtos que se competem nas bombas dos postos de abastecimento. Uma discrepância no preço de um deles geraria uma distorção na relação oferta-demanda, ocasionando naturalmente uma subida nos preços por força compradora.
+\
+\
+Entretanto, discrepâncias na paridade entre os preços de Etanol Hidratado e Gasolina Comum podem migrar o consumo entre os produtos. Esse efeito é visualizado ao observamos momentos de **reajuste nos preços da Gasolina para cima**, no qual há um aumento no volume de vendas de etanol. Isso fica ainda mais evidenciado ao analisarmos o cálculo da **diferença de preços**. Quanto maior a diferença, maior a demanda pela substituição do Etanol por Gasolina.
+\
+\
+     <p style="text-align: center;">F) **API Request - SGS Banco Central**</p>
+\
+(Chamando API do Banco Central para captura de dados de *Índice de volume de vendas no varejo - total*).
+\
+\
+```{r getBCB, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Chamando datasets pelo codigo das informacoes
+
+vendas_varejo_bcb <- GetBCBData::gbcbd_get_series(
+  id = c('AC' = 1457,
+         'AL' = 1469,
+         'AM' = 1458,
+         'AP' = 1461,
+         'BA' = 1471,
+         'CE' = 1465,
+         'DF' = 1482,
+         'ES' = 1473,
+         'GO' = 1481,
+         'MA' = 1463,
+         'MG' = 1472,
+         'MS' = 1479,
+         'MT' = 1480,
+         'PA' = 1460,
+         'PB' = 1467,
+         'PE' = 1468,
+         'PI' = 1464,
+         'PR' = 1476,
+         'RJ' = 1474,
+         'RN' = 1466,
+         'RO' = 1456,
+         'RR' = 1459,
+         'RS' = 1478,
+         'SC' = 1477,
+         'SE' = 1470,
+         'SP' = 1475,
+         'TO' = 1462), ## Volume de Vendas no Varejo por Estado
+  first.date = min(sales_vbbr$year_mon),
+  last.date = max(sales_vbbr$year_mon),
+  format.data = 'long',
+  cache.path = tempdir()) 
+
+# Renomeando colunas
+
+vendas_varejo_bcb <- vendas_varejo_bcb %>%
+  dplyr::select(year_mon = ref.date, volume_vendas_varejo_bcb = value, unidade_da_federacao = series.name)
+
+# Join com a base principal
+
+sales_vbbr <- sales_vbbr %>%
+  dplyr::inner_join(
+    vendas_varejo_bcb, 
+    by = c(
+      "year_mon", "unidade_da_federacao"
+    )
+  )
+
+# Dropando base consultada
+
+rm(vendas_varejo_bcb)
+
+# Print na tela dos resultados
+
+dplyr::glimpse(sales_vbbr)
+
+```
+\
+\
+**Comments:** Neste dataset, a ideia é que um maior volume de vendas no varejo impacta positivamente na demanda por combustíveis. Afinal, mais vendas no varejo significa maior número de pessoas circulando nas ruas e consequentemente maior número de automóveis e a necessidade de abastecimento dos mesmos. Vamos checar se isso se confirma.
+\
+\
+```{r plot_anpBcb, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Criando grafico para analise
+
+gridExtra::grid.arrange(
+  anp_bcp_comparative(sales_vbbr, "Todas as Regiões"),
+  anp_bcp_comparative(sales_vbbr %>% dplyr::filter(grande_regiao == "SE"), "Região Sudeste"),
+  ncol = 2, nrow = 1)
+
+```
+\
+\
+**Comments:** Analisando o gráfico gerado, vemos como a hipótese se confirma, tendo os mesmos *trends* em curto prazo. Inclusive, os picos coincidem entre si, em momentos de fim de ano onde o consumo é maior para comemoração de festividades e viagens pessoais.
+
+
+***
+
+
+## . **Base de Modelagem**:
+\
+Por fim dessa primeira parte, salvaremos nossa base final utilizada para o processo de criação do modelo de previsão.
+\
+\
+```{r final_df, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Base final
+
+sales_vbbr <- sales_vbbr %>%
+  dplyr::select(
+    grande_regiao, unidade_da_federacao, year_mon, 
+    dplyr::starts_with(c("media", "volume", "vendas")))
+
+# Print na tela do shape final do dataframe e sua estrutura
+
+dplyr::glimpse(sales_vbbr)
+
+# Salvando dados 
+
+arrow::write_parquet(
+      sales_vbbr,
+      sink = paste0(
+        "C:/Users/daiha/OneDrive/Documentos/R/PS/Vibra/aux_datasets/cleaned_sales.parquet"))
+
+# Limpando workspace
+
+rm(list = ls())
+
+```
+\
+\

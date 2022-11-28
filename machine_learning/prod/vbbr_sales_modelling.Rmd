@@ -1,0 +1,792 @@
+---
+title: "Análise de Vendas - Produtos de Petróleo - ANP"
+subtitle: 'Predictive Model'
+author: "Felipe Daiha Alves"
+date: '`r format(Sys.Date(), "%Y-%m-%d")`'
+output: 
+  html_document: 
+    fig_width: 14
+    fig_height: 8
+    highlight: monochrome
+    number_sections: true
+---
+\
+
+***
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r functions, echo=TRUE}
+
+# Funcoes utilizadas neste markdown
+
+  ## 1 - total_sales_gc
+
+  total_sales_product <- function(df, title){
+    
+    ### Construindo plot para analise
+  
+    plot <- ggplot2::ggplot(
+      data = df %>%
+        tidyr::pivot_longer(c(dplyr::starts_with("vendas"))) %>%
+        dplyr::select(year_mon, name, value) %>%
+        dplyr::group_by(year_mon, name) %>%
+        dplyr::summarise(total_vendas = sum(value, na.rm = TRUE)), 
+      aes(x = year_mon, y = total_vendas)) +
+      ggplot2::geom_line(linetype = "solid",  colour = 'darkblue', size = 1) +
+      ggplot2::geom_point(color = 'darkblue', size = 2) +
+      ggplot2::scale_x_date(breaks = "1 year", date_labels = "%Y") +
+      ggplot2::geom_smooth(method = "auto", color = 'red', size = 2) +
+      ggplot2::labs(
+        title = paste0('Total de Vendas <> ', title), 
+        subtitle = "ANP: Maio/2004 a Dezembro/2021",
+        x = "Data",
+        y = "Total de Vendas") +
+      ggplot2::theme(
+        panel.background = element_rect(fill = "white"),
+        legend.title = element_text(size = 14.0),
+        legend.text = element_text(size = 10.0),
+        axis.text.x = element_text(angle = 30, size = 10.0),
+        axis.text.y = element_text(size = 10.0),
+        axis.title.x = element_text(size = 14.0),
+        axis.title.y = element_text(size = 14.0),
+        panel.grid.major.y =  element_line(colour = "lightgrey"),
+        panel.grid.major.x =  element_line(colour = "lightgrey"),
+        plot.title = element_text(size = 16.0, face = "bold"),
+        plot.subtitle = element_text(size = 14.0),
+        strip.text.x = element_text(size = 10.0)) +
+    ggplot2::facet_wrap(~ factor(name), nrow = 1, ncol = 2, scales = 'free')
+    
+    ### Retorno da funcao
+    
+    plot
+  
+  }
+
+  ## 2 - decompose_ts_product
+
+  decompose_ts_product <- function(x, seasonal_wdw = "periodic", trend_wdw = 24){
+  
+    # Criando uma base do tipo 'ts':
+    
+    decom_ts <- stats::ts(
+      x,
+      start = c(lubridate::year(min(sales_vbbr$year_mon)), lubridate::month(min(sales_vbbr$year_mon))),
+      end = c(lubridate::year(max(sales_vbbr$year_mon)), lubridate::month(max(sales_vbbr$year_mon))),
+      frequency = 12)
+    
+    # Decomposição da serie temporal em sub-series e analise dos componentes
+    
+    dts = stats::stl(decom_ts, s.window = seasonal_wdw, t.window = trend_wdw)
+    
+    # Transformando em um data frame para melhor visualizacao da decomposicao
+    
+    tseries_decom = as.data.frame(cbind(decom_ts, dts$time.series))
+    colnames(tseries_decom) = c("DATA", "SEASONAL", "TREND", "REMAINDER")
+    
+    # Dando um bind com as datas
+    
+    date_seq <- seq(from = as.Date(min(sales_vbbr$year_mon)), to = as.Date(max(sales_vbbr$year_mon)), by = "1 month")
+    tseries_decom <- cbind(tseries_decom, date_seq)
+    
+    # Retornando resultado
+    
+    tseries_decom
+    
+  }
+  
+  ## 3 - decompose_plot
+  
+  decompose_plot <- function(ts, date_limits = as.Date(c("2005-01-01", "2021-12-01")), sub){
+    
+    # Criando uma nova variavel para plot do 'decompose':
+
+    ts_pivot <- ts %>%
+      tidyr::pivot_longer(cols = !c(date_seq))
+
+    # Decompose TS plot:
+    
+    plot <- ggplot2::ggplot(ts_pivot, aes(x = date_seq, y = value)) +
+      ggplot2::geom_line(linetype = "solid",  colour = 'black', size = 0.8) +
+      ggplot2::scale_x_date(
+        date_labels = "%Y", 
+        limits = date_limits, 
+        date_breaks = "1 year") +
+      ggplot2::labs(title = "Decompose Time Series",
+           subtitle = paste0(sub),
+           x = 'Ano-Mês',
+           y = 'Valor') +
+      ggplot2::theme(
+        panel.background = element_rect(fill = "white"),
+        panel.border = element_rect(colour = "black", fill = NA, size = 1),
+        legend.title = element_text(size = 14.0),
+        legend.text = element_text(size = 10.0),
+        axis.text.x = element_text(angle = 30, size = 10.0),
+        axis.text.y = element_text(size = 10.0),
+        axis.title.x = element_text(size = 14.0),
+        axis.title.y = element_text(size = 14.0),
+        panel.grid.major.y =  element_line(colour = "lightgrey"),
+        panel.grid.major.x =  element_line(colour = "lightgrey"),
+        plot.title = element_text(size = 16.0, face = "bold"),
+        plot.subtitle = element_text(size = 14.0),
+        strip.text.x = element_text(size = 10.0)) +
+      ggplot2::facet_wrap(~as.factor(name), ncol = 1, scales = "free")
+    
+    # Retornando plot
+    
+    plot
+    
+  }
+  
+  ## 4 - decom_rename
+  
+  decom_rename <- function(data, product){
+    
+    df <- data %>%
+      dplyr::mutate(
+        dplyr::across(
+          dplyr::everything(),
+          ~.x,
+          .names = paste0("decompose_{.col}_", product)
+          )) %>%
+      dplyr::select(dplyr::starts_with("decompose"))
+    
+  }
+  
+  ## 5 - regressors_2_prophet
+  
+  regressors_2_prophet <- function(model, vars){
+    
+    ### Passando modelo
+    
+    prophet_model <- model
+    
+    ### Adicionando variaveis como regressoras no modelo
+  
+    for (i in vars){
+    
+      prophet_model <- prophet::add_regressor(prophet_model, i)
+    
+    }
+    
+    ### Retornando resultado
+  
+    prophet_model
+  
+  }
+  
+  ## 6 - metrics_prophet
+  
+  metrics_prophet <- function(df, r.window = 0.3){
+    
+    prophet::performance_metrics(
+        df,
+        metrics = c('rmse', 'mae', 'mape'),
+        rolling_window = r.window) %>%
+        dplyr::mutate(horizon = as.numeric(gsub("([0-9]+).*$", "\\1", horizon))) %>%
+        dplyr::filter(horizon %in% seq(30, 30*3, 30))
+    
+}
+  
+  ## 7 - tbl_view
+  
+  tbl_view <- function(view, capt){
+    
+    # Plot da tabela para html
+  
+    knitr::kable(view, caption = paste0("<b>", capt, "<b>"), 
+                   row.names = TRUE, align = 'c', longtable = T, 
+                   table.attr = "style='width:30%;'", format = 'html') %>%
+      kableExtra::kable_styling(full_width = TRUE, position = "center") %>%
+      kableExtra::row_spec(0, bold = TRUE)
+  
+  }
+  
+  ## 8 - real_prediction_plot
+  
+  real_prediction_plot <- function(df, datetime, y_true, y_pred, type, y_lower, y_upper){
+    
+    ### Passando variaveis para formato da funcao
+  
+    date_name <- ensym(datetime)
+    ytrue_name <- ensym(y_true)
+    ypred_name <- ensym(y_pred)
+    ylower_name <- ensym(y_lower)
+    yupper_name <- ensym(y_upper)
+    
+    ### Plot dado real x predito
+
+    plot <- ggplot2::ggplot(
+      data = df, aes(x = as.Date(!!date_name), y = !!ytrue_name, colour = "Real")) +
+      ggplot2::geom_line(linetype = "solid", size = 1) +
+      ggplot2::geom_point(colour = "darkblue", size = 2) +
+      ggplot2::scale_x_date(breaks = "1 year", date_labels = "%Y") +
+      ggplot2::geom_line(aes(y = !!ypred_name,  colour = type), linetype = "solid", size = 1) +
+      ggplot2::geom_point(aes(y = !!ypred_name), colour = "#4892D2", size = 2) +
+      ggplot2::scale_colour_manual(
+        name = "Dado",
+        limits = c("Real", type), 
+        values = c("darkblue", "#4892D2")) +
+      ggplot2::geom_ribbon(aes(ymin = !!ylower_name, ymax = !!yupper_name), fill = "grey80", alpha=0.7) +
+      ggplot2::labs(
+        title = paste0("Volume Total de Vendas x ", type, " <> Região Sudeste"),
+        x = 'Ano',
+        y = 'Volume Total (m³)') +
+      ggplot2::theme(
+        panel.background = element_rect(fill = "white"),
+        legend.title = element_text(size = 14.0),
+        legend.text = element_text(size = 10.0),
+        axis.text.x = element_text(angle = 30, size = 10.0),
+        axis.text.y = element_text(size = 10.0),
+        axis.title.x = element_text(size = 14.0),
+        axis.title.y = element_text(size = 14.0),
+        panel.grid.major.y =  element_line(colour = "lightgrey"),
+        panel.grid.major.x =  element_line(colour = "lightgrey"),
+        plot.title = element_text(size = 16.0, face = "bold"),
+        plot.subtitle = element_text(size = 14.0),
+        strip.text.x = element_text(size = 10.0))
+    
+    ### Retorno da funcao
+  
+    plot
+  
+  }
+  
+  ## 9 - predict_regressors
+  
+  predict_regressors <- function(
+    vars = c(
+  "movAvg_avg_media_valor_de_venda_ETANOL", 
+  "movAvg_avg_media_valor_de_venda_GASOLINA",
+  "movAvg_avg_volume_vendas_varejo_bcb",
+  "movAvg_sum_vendas_etanol_hidratado")
+  ){
+
+  ## Criando lista vazia para armazenar os resultados do regressor
+  
+  list_dfs_regressors <- base::list()
+  
+  ## Loop para prever cada regressor e guardar dados na lista
+  
+  for (i in vars){
+    
+    ### Selecionando variaveis e renomeando para formato do 'prophet'
+    
+    regressor <- train_sales %>%
+      dplyr::select(ds = ds, y = i)
+    
+    ### Criando e ajustando modelo
+    
+    regressor_model <- prophet::prophet(
+      growth = "linear", 
+      seasonality.mode = 'additive')
+    
+    regressor_model <- prophet::fit.prophet(
+      regressor_model, regressor)
+    
+    ### Fazendo previsao de valores futuros
+    
+    regressor_forecast <- prophet::make_future_dataframe(
+      m = regressor_model,
+      periods = 12,
+      freq = "month",
+      include_history = FALSE
+    )
+    
+    df <- predict(regressor_model, regressor_forecast) %>%
+      dplyr::select(ds, yhat)
+    
+    ### Renomenado coluna
+    
+    names(df)[2] <- paste0(i)
+    
+    ### Append de dataframe na lista
+    
+    list_dfs_regressors[[base::length(list_dfs_regressors) + 1]] <- df
+    
+    ### Print de resultado
+    
+    print(paste0("Regressor >", i, "< previsto!"))
+    
+  }
+  
+  # Join por ds
+  
+  joined_regressors <- purrr::reduce(list_dfs_regressors, full_join, by = "ds")
+  
+  # Retorno de resultado
+  
+  joined_regressors
+
+}
+
+```
+
+```{css, include=FALSE}
+li {
+    list-style-type: circle;
+}
+
+li li {
+    list-style-type: square;
+}
+```
+
+# **Disclaimer**:
+\
+Relatório da etapa de *machine lerarning* contendo informações e resultados sobre o processo de **Previsão de Vendas** de produtos derivados de petróleo. O conjunto de dados original foi fornecido pela empresa contratante como projeto para a vaga de *Data Scientist* disponibilizada.
+
+
+***
+
+
+# **Objetivo**:
+\
+A finalidade deste *case* é desenvolver uma solução de dados que identifique o potencial de mercado para os meses de JAN/FEV/MAR de 2022 para o produto **Gasolina C** na região sudeste. Além disso, deve-se indicar o mercado potencial para o ano de 2022 para o mesmo produto e região. Para avaliação, segue os dados: 
+
+
+***
+
+
+# **Pipeline**:
+
+## . **Configuração de Ambiente**:
+\
+Etapa inicial do processo de modelagem. Nele, iremos configurar nosso ambiente de desenvolvimento e carregar a base de dados previamente tratada.
+\
+\
+     <p style="text-align: center;">A) **Configurando Ambiente**</p>
+\
+(Instalando e/ou carregando pacotes necessários e ajuste de opções de visualização.) 
+\
+\
+```{r env, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Nome dos pacotes
+
+packages <- c(
+  'rgl', ## Configuracao em RMarkdown
+  'data.table', 'arrow',  ## Leitura de dados
+  'dplyr', 'tidyr', 'zoo', 'lubridate', 'purrr', ## Manipulacao de Dados
+  'prophet', ## Modelo de Series Temporais
+  'ggplot2', 'gridExtra', 'scales', 'kableExtra', ## Visualizacao de Dados
+  'MLmetrics' ## Avaliacao de resultados
+  )
+
+
+# Instalando pacotes (caso ainda nao esteja)
+
+installed_packages <- packages %in% rownames(installed.packages())
+if (any(installed_packages == FALSE)) {
+  install.packages(packages[!installed_packages])
+}
+
+
+# Carregando pacotes
+
+invisible(lapply(packages, library, character.only = TRUE))
+
+
+# Removendo variaveis criadas previamente
+
+rm(packages, installed_packages)
+
+
+# Configuracoes de visualizacao no markdown
+
+base::options(rgl.useNULL = TRUE, digits = 10, scipen = 999, encoding = "utf-8", dplyr.summarise.inform = FALSE)
+rgl::setupKnitr(autoprint = TRUE)
+
+```
+\
+     <p style="text-align: center;">B) **Carregando Dados**</p>
+\
+(Carregamento de arquivo *.parquet* e print do arquivo para retomada de sua estrutura.)
+\
+\
+```{r loadData, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Load da base de dados
+
+sales_vbbr <- arrow::read_parquet(
+  'C:/Users/daiha/OneDrive/Documentos/R/PS/Vibra/aux_datasets/cleaned_sales.parquet') 
+
+
+# Visualizacao primaria dos dados
+
+dplyr::glimpse(sales_vbbr)
+
+```
+\
+\
+<ul>
+  <li>**Dicionário de Variáveis**
+    <ul>
+        <li>*grande_regiao* <> Região da Venda</li>
+        <li>*unidade_da_federacao* <> Estado da Venda</li>
+        <li>*year_mon* <> Ano-Mês da Venda</li>
+        <li>*media_valor_de_venda_ETANOL* <> Preço médio de venda de Etanol Hidratado nos postos</li>
+        <li>*media_valor_de_venda_GASOLINA* <> Preço médio de venda de Gasolina Comum nos postos</li>
+        <li>*volume_vendas_varejo_bcb* <> Indicador do volume de vendas totais no varejo</li>
+        <li>*vendas_etanol_hidratado* <> Volume total (m³) de vendas de Etanol Hidratado</li>
+        <li>*vendas_etanol_hidratado* <> Volume Total (m³) de vendas de Gasolina Comum</li>
+    </ul>
+  </li>
+</ul>
+\
+\
+
+
+***
+
+
+## . **Avaliação do Problema**:
+\
+A finalidade dessa etapa é entender o comportamento ao longo do tempo das **Vendas de Gasolina C na Região Sudeste**. A view do dataframe está ajustada no momento para o agrupamento >>*year_mon, unidade_da_federacao, grande_regiao*<<
+\
+\
+     <p style="text-align: center;">A) **Time Series Vendas Gasolina C**</p>
+\
+(Construindo gráfico de Séries Temporais para analisar o comportamento das vendas à medida do tempo na Região Sudeste) 
+\
+\
+```{r ts_se_sales, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Filtrando apenas para regiao Sudeste e anos fechados
+
+sales_vbbr <- sales_vbbr %>% 
+  dplyr::filter(grande_regiao == "SE")
+
+# Plot para visualizacao
+
+total_sales_product(sales_vbbr, "Região Sudeste")
+
+```
+\
+\
+     <p style="text-align: center;">B) **Decomposição de Séries Temporais**</p>
+\
+(Plot da matriz de correlação entre as variáveis numéricas de vendas para Gasolina Comum na Região Sudeste) 
+\
+\
+```{r decompose_plot, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Decompose TS dataframe:
+
+ts_gasolina <- decompose_ts_product(sales_vbbr$vendas_gasolina_c)
+
+# Decompose TS plot:
+
+decompose_plot(ts = ts_gasolina, sub = "Vendas Gasolina Comum")
+
+```
+\
+\
+**Comments:** Para o processo de decomposição das séries temporais, foi considerada para captura de *sazonalidade* a média histórica dos períodos, enquanto a janela de tempo para a extração da *tendência* considerou o intervalo de defasagem de 24 meses.
+\
+\
+O racional envolve as projeções da Empresa de Pesquisa Energética (EPE) <https://www.udop.com.br/noticia/2021/5/19/venda-de-combustivel-deve-voltar-em-2022-a-nivel-pre-pandemia.html>. Para 2022, foram projetadas vendas em linha com 2019, antes da eclosão da pandemia.
+\
+\
+O que pode-se concluir daqui principalmente é a forte **Sazonalidade Anual** no produto Gasolina Comum e que será considerada no processo de modelagem.
+\
+\
+(Sumarizando dataframe para visao ´Região Sudeste´) 
+\
+\
+```{r summarise_df, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Removendo time series
+
+rm(ts_gasolina)
+
+# Dataframe sumarizado
+
+sales_vbbr <- sales_vbbr %>%
+  dplyr::select(!c(grande_regiao, unidade_da_federacao)) %>%
+  dplyr::group_by(year_mon) %>%
+  dplyr::summarise(
+    dplyr::across(
+      !dplyr::starts_with("vendas"),
+      ~mean(.x, na.rm = TRUE),
+      .names = "avg_{.col}"
+    ),
+    dplyr::across(
+      dplyr::starts_with("vendas"),
+      ~sum(.x, na.rm = TRUE),
+      .names = "sum_{.col}"
+    )
+  )
+
+```
+\
+\
+**Comments:** Para a visão sumarizada da Região Sudeste, foi capturada a **soma** das vendas de **Etanol Hidratado** e **Gasolina Comum**. Já para o caso do **preço** de revenda nos postos e o volume de **vendas no varejo**, foi considerara a média dos estados que compõem a região do país.
+\
+\
+
+
+***
+
+
+## . **Modelando Séries Temporais & Avaliação de Resultados**:
+\
+Posteriormente, inicia-se o processo de previsão de séries temporais construindo modelos de *machine learning* apropriados para tal finalidade. Para o problema, utilizaremos o algoritmo *Prophet*, extremamente utilizado para séries temporais com: (a) **efeitos sazonais fortes**; (b) **grande histórico de dados**, (c) **alterações de tendência** e (d) **presença de outliers** (TAYLOR; LETHAM, 2017)
+\
+\
+     <p style="text-align: center;">A) **Utilizando Médias Móveis como Valor dos Regressores**</p>
+\
+(Puxando dados de média móvel dos últimos meses para estimar regressores no passado) 
+\
+\
+```{r movingAverageRegressors, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Calculo de medias moveis com 3 meses de referencia
+
+sales_vbbr <- sales_vbbr %>%
+  dplyr::mutate(
+    dplyr::across(c(dplyr::starts_with("avg"), "sum_vendas_etanol_hidratado"),
+      ~zoo::rollmean(.x, k = 3, fill = NA, align = "right"),
+      .names = "movAvg_{.col}"
+    )
+  ) %>%
+  dplyr::select(year_mon, dplyr::starts_with("movAvg"), sum_vendas_gasolina_c) %>%
+  tidyr::drop_na()
+
+# Print na tela
+
+glimpse(sales_vbbr)
+
+```
+\
+\
+     <p style="text-align: center;">B) **Construindo Modelo com Prophet**</p>
+\
+(Adicionando parâmetros ao modelo, ajustando regressores e fitando modelo com dataset de treino) 
+\
+\
+```{r prophetModel, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Criando copia do db e renomeando colunas conforme necessidade no Prophet
+
+train_sales <- sales_vbbr %>%
+  dplyr::rename(
+    ds = year_mon,
+    y = sum_vendas_gasolina_c)
+
+# Ajuste de parametros primarios verificados no processo de decomposicao
+
+model_prophet <- prophet::prophet(
+  growth = "linear", 
+  yearly.seasonality = TRUE, 
+  weekly.seasonality = FALSE,
+  daily.seasonality = FALSE,
+  seasonality.mode = 'additive')
+
+# Passando regressores para o modelo
+
+model_prophet <- regressors_2_prophet(
+  model_prophet, 
+  c("movAvg_avg_media_valor_de_venda_ETANOL", 
+    "movAvg_avg_media_valor_de_venda_GASOLINA",
+    "movAvg_avg_volume_vendas_varejo_bcb",
+    "movAvg_sum_vendas_etanol_hidratado"))
+
+# Fitando modelo com o dataframe de treino
+
+model_prophet <- prophet::fit.prophet(
+  model_prophet, train_sales)
+
+```
+\
+\
+(Aplicando validacao cruzada e extraindo resultados da base de treino)
+\
+\
+```{r trainingTune, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Start time para calculo
+
+startTime = Sys.time()
+
+# Extraindo resultados de train set
+
+train_results <- prophet::cross_validation(
+  model = model_prophet,
+  horizon = 90,
+  initial = 365.25,
+  units = "days"
+)
+
+# Pegando o fim da execução do codigo
+
+endTime <- Sys.time()
+
+# Calulando o tempo de duracao em
+
+paste0("CV execution time: ", round(as.vector(difftime(endTime, startTime, units='mins')), 1), " minutes.")
+
+# Dropando variaveis indesejadas
+
+rm(endTime, startTime)
+
+```
+\
+```{r view_metrics_train, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Visualizacao de MAE e RMSE
+
+tbl_view(
+  metrics_prophet(train_results), 
+  "Métricas de Avaliação - Treino por Janela de Tempo")
+
+```
+\
+\
+**Comments:** Aqui, aplica-se o método de validação cruzada do tipo *rolling CV*, no qual é utilizado para treino um conjunto de **1 ano** (conforme a sazonalidade) para previsão dos próximos **3 meses** (conforme o problema proposto). O objetivo é obter o menor valor de **MAPE** para a previsão.
+\
+\
+As métricas variaram conforme o horizonte de tempo, mantendo as métricas de erro menores no prazo de **1 e 2 meses** do que em relação aos prazo de **3 meses**.
+\
+\
+```{r plot_train_real_comparative, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Metricas de avaliacao dos dados de treino (Considerar previsao de teste na CV apenas horizonte * 1)
+
+metrics_df_train <- train_results %>%
+    dplyr::filter(ds >= min(as.Date(train_results$ds)) + lubridate::years(1)) %>%
+    dplyr::group_by(ds) %>%
+    dplyr::summarise(
+      dplyr::across(
+        dplyr::starts_with("y"),
+        ~mean(.x, na.rm = TRUE),
+        .names = "train_{.col}"
+      )
+    )
+
+real_prediction_plot(metrics_df_train, ds, train_y, train_yhat, "Treino", train_yhat_lower, train_yhat_upper)
+
+```
+\
+\
+**Comments:** O modelo aparentemente tem dificuldade de capturar fortes períodos de **volatilidade** nas vendas totais. Como o histórico de dados não apresenta essa característica tão explícita, o processo de validação cruzada não captura esses mudanças abruptas e o erro é maior nesses períodos. Fica evidente por exemplo no período de pandemia no mundo durante a COVID-19. O volume de vendas cai abruptamente e o modelo não consegue capturar esse tipo de informação. Porém, a informação é rapidamente absorvida e a nova tendência já é considerada para previsões futuras.
+\
+\
+
+
+***
+
+
+## . **Forecasting de Dados Futuros**:
+\
+Por fim, buscamos a resposta para o problema proposto. Iremos prever os valores de vendas de gasolina comum na Região Sudeste para os 3 primeiros meses de 2022 e para o ano completo.
+\
+\
+     <p style="text-align: center;">A) **Construindo dataframe**</p>
+\
+(Criando dados futuros para previsao de vendas) 
+\
+\
+```{r forecast_df, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Previsao de regressores
+
+future_regressors <- predict_regressors()
+
+# Previsao de dados futuros (proximos 12 meses)
+
+df_predict <- predict(
+  model_prophet, future_regressors) %>%
+  dplyr::select(ds, yhat_lower, yhat, yhat_upper)
+
+# Mostrando dataframe
+
+head(df_predict, 12)
+
+
+```
+\
+\
+**Comments:** Para previsão dos valores das features para os próximos 12 meses, foi utilizado o próprio *Prophet* para cada variável, sem inclusão de regressores nos sub-modelos para a obtenção dos dados.
+\
+\
+     <p style="text-align: center;">B) **Plotando visualizacao**</p>
+\
+(Grafico dados reais e previsão futura) 
+\
+\
+```{r plot_forecast, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Visualizacao das previsoes para os proximos 12 meses
+
+ggplot2::ggplot(
+  data = dplyr::bind_rows(
+  df_predict %>% dplyr::mutate(ds = as.Date(ds), dataset = "Prediction"),
+  sales_vbbr %>% dplyr::select(ds = year_mon, yhat = sum_vendas_gasolina_c) %>% dplyr::mutate(dataset = "Real")), 
+  aes(x = as.Date(ds), y = yhat, colour = dataset)) +
+  ggplot2::geom_line(linetype = "solid", size = 1) +
+  ggplot2::geom_point(size = 2) +
+  ggplot2::scale_x_date(breaks = "1 year", date_labels = "%Y") +
+  ggplot2::scale_colour_manual(
+    name = "Dado",
+    limits = c("Previsão", "Real"), 
+    values = c("#4892D2", "darkblue")) +
+  ggplot2::geom_ribbon(aes(ymin = yhat_lower, ymax = yhat_upper), fill = "grey80", alpha=0.7) +
+  ggplot2::labs(
+    title = paste0("Volume Total de Vendas x Previsão Próximos 12 meses <> Região Sudeste"),
+    x = 'Ano',
+    y = 'Volume Total (m³)') +
+  ggplot2::theme(
+    panel.background = element_rect(fill = "white"),
+    legend.title = element_text(size = 14.0),
+    legend.text = element_text(size = 10.0),
+    axis.text.x = element_text(angle = 30, size = 10.0),
+    axis.text.y = element_text(size = 10.0),
+    axis.title.x = element_text(size = 14.0),
+    axis.title.y = element_text(size = 14.0),
+    panel.grid.major.y =  element_line(colour = "lightgrey"),
+    panel.grid.major.x =  element_line(colour = "lightgrey"),
+    plot.title = element_text(size = 16.0, face = "bold"),
+    plot.subtitle = element_text(size = 14.0),
+    strip.text.x = element_text(size = 10.0))
+
+```
+\
+\
+     <p style="text-align: center;">C) **Volume de Vendas - Região Sudeste**</p>
+\
+(Solução do problema proposto em visão sumarizada) 
+\
+\
+```{r problem_answer, echo=TRUE, message=FALSE, warning=FALSE}
+
+tbl_view(
+    data.frame(
+      proximos_3_meses = sum(df_predict$yhat[df_predict$ds <= "2022-03-01"], na.rm = TRUE),
+      proximos_12_meses = sum(df_predict$yhat, na.rm = TRUE)
+    ), 
+    "Previsão de Vendas <> Gasolina Comum (m³) na Região Sudeste")
+```
+
+***
+
+
+## . **Sugestões Futuras**:
+\
+Devido ao prazo e a complexidade do problema, há de fato muito espaço para melhorias. Os principais pontos a serem otimizados são:
+\
+\
+<ul>
+  <li>**Melhorias**
+    <ul>
+        <li>*1 - Maior nº de regressores* <> Foram capturadas e estudadas variáveis a serem utilizadas como regressores de forma rápida e objetiva em fontes públicas e consultado junto à colegas especialistas da área. Pode-se **explorar novas features** capazes de auxiliarem o processo de previsão</li>
+        <li>*2 - Médias Móveis conforme CV* <> A metodologia aplicada para retomar ao cenário no passado e considerar as informações da época foi utilizar médias móveis das variáveis. Entretanto, é mais fidedigno o processo ser encaixado dentro da **rolling CV**. Ou ainda usar o próprio *Prophet* dentro do processo de validação cruzada para prever o valor dos regressores a medida que o CV vai rearranjando os conjuntos de treino e teste na sua metodologia. </li>
+        <li>*3 - Prever Gasolina Comum por Fórmula* <> Há inúmeros fatores que afetam o preço e as vendas deste produto: Fatores políticos; econômicos; crises; etc. Uma alternativa para chegar na mesma previsão seria prever as vendas de Gasolina Comum *"por tabela"*, ao prever a venda total do conjunto **Gasolina + Etanol** e buscar mais parâmetros que impactem na venda geral de combustíveis (e.g. Circulação de Carros nas Ruas; Crédito para Financiamentos Veiculares; etc.). </li>
+        <li>*4 - Criação de Modelos para Horizontes de Tempos* <> Outro ponto de melhoria considerável seria elaborar modelos para previsão de **curto/médio/longo prazo**. A ideia de usar um único estimador para a previsão da série temporal não é errada, mas os resultados serão mais otimizados e com menor erro se houver uma **divisão conforme o horizonte de tempo** que se quer prever, assim como é feito para a previsão por região/estado/produto. </li>
+    </ul>
+  </li>
+</ul>
+\
+\
