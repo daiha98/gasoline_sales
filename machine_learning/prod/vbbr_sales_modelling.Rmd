@@ -18,7 +18,7 @@ output:
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-```{r functions, echo=TRUE}
+```{r functions, include=FALSE}
 
 # Funcoes utilizadas neste markdown
 
@@ -336,7 +336,7 @@ li li {
 
 # **Disclaimer**:
 \
-Relatório da etapa de *machine lerarning* contendo informações e resultados sobre o processo de **Previsão de Vendas** de produtos derivados de petróleo. O conjunto de dados original foi fornecido pela empresa contratante como projeto para a vaga de *Data Scientist* disponibilizada.
+Relatório da etapa de *machine lerarning* contendo informações e resultados sobre o processo de **Previsão de Vendas** de produtos derivados de petróleo.
 
 
 ***

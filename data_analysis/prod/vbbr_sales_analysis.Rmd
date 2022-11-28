@@ -18,7 +18,7 @@ output:
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-```{r functions, echo=TRUE}
+```{r functions, include=FALSE}
 
 # Funcoes utilizadas neste markdown
 
